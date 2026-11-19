@@ -3,10 +3,19 @@ name: Generate AI Prediction
 on:
   schedule:
     # 开奖后 35 分钟：北京时间 22:00 (UTC 14:00)
-    # 确保 update-lottery-data (21:40) 已完成，数据已更新
+    # 兜底：GitHub Actions 的 cron 可能延迟数小时，不能只依赖它
     # 大乐透每周一/三/六开奖，非开奖日运行无新数据会自动跳过
     - cron: '0 14 * * *'
+  workflow_run:
+    # 数据更新完成后立即重新生成预测，避免 cron 延迟造成数据与预测不同步
+    workflows: ["Update Lottery Data"]
+    types: [completed]
   workflow_dispatch: # 也支持手动触发
+
+concurrency:
+  # 定时任务与 workflow_run 可能同时触发，串行执行避免 git push 冲突
+  group: generate-ai-prediction
+  cancel-in-progress: false
 
 jobs:
   generate-prediction:

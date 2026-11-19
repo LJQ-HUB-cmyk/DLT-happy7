@@ -19,6 +19,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from strategies.selection import rank_strategies
+from freshness import check_freshness
 
 HISTORY_FILE     = os.path.join(BASE_DIR, "data", "lottery_history.json")
 PREDICTIONS_FILE = os.path.join(BASE_DIR, "data", "ai_predictions.json")
@@ -100,6 +101,12 @@ def validate_data(data):
                 f"预测目标为第 {target} 期，与系统计算的下一期未开奖（第 {next_period} 期）不一致，拒绝推送"
             )
         # else: target == next_period，正是下一期未开奖 ✅
+
+    # ---- 硬校验：数据必须相对北京时间是新鲜的 ----
+    # 定时任务可能延迟数小时；数据未跟上开奖节奏时，即使文件内部自洽也不能推送。
+    fresh_errors, fresh_warnings = check_freshness(lh)
+    errors.extend(fresh_errors)
+    warnings.extend(fresh_warnings)
     return errors, warnings
 
 

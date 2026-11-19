@@ -29,6 +29,7 @@ from strategies.selection import (
     load_predictions_history,
     select_top_strategies,
 )
+from freshness import check_freshness
 
 AI_PREDICTIONS_FILE = os.path.join(SCRIPT_DIR, "data", "ai_predictions.json")
 TOP_N_STRATEGIES = DEFAULT_TOP_N
@@ -196,6 +197,16 @@ def main():
     if not history or not history.get("data"):
         print("❌ 历史数据为空，请先运行爬虫更新数据")
         return
+
+    # 数据未跟上开奖节奏时拒绝生成预测，避免把"已开奖期"的预测提交到仓库
+    fresh_errors, fresh_warnings = check_freshness(history)
+    for w in fresh_warnings:
+        print(f"  ⚠️ {w}")
+    if fresh_errors:
+        print("\n❌ 开奖数据不新鲜，拒绝生成预测：")
+        for e in fresh_errors:
+            print(f"  ❌ {e}")
+        sys.exit(1)
 
     target_period, target_date, prediction_date = get_next_draw_info(history)
     if not target_period:
