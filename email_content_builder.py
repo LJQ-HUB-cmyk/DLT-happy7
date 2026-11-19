@@ -341,20 +341,23 @@ def _build_best_combo_html(hist, pred=None, limit=10, threshold=5):
                 key_a = (mid_a, strat_a)
                 key_b = (mid_b, strat_b)
                 key = tuple(sorted([key_a, key_b]))
-                hits = (len((front_a | front_b) & actual_front)
-                        + len((back_a | back_b) & actual_back))
+                front_hits = len((front_a | front_b) & actual_front)
+                hits = front_hits + len((back_a | back_b) & actual_back)
                 s = stats.get(key)
                 if s is None:
                     s = stats[key] = {
                         "keys": key,
                         "labels": {key_a: label_a, key_b: label_b},
-                        "count": 0, "best": 0, "total": 0, "games": 0,
+                        "count": 0, "front_count": 0,
+                        "best": 0, "total": 0, "games": 0,
                     }
                 s["games"] += 1
                 s["total"] += hits
                 s["best"] = max(s["best"], hits)
                 if hits >= threshold:
                     s["count"] += 1
+                if front_hits >= threshold:
+                    s["front_count"] += 1
 
     rows = sorted(
         stats.values(),
@@ -403,19 +406,21 @@ def _build_best_combo_html(hist, pred=None, limit=10, threshold=5):
             <div style="margin-top:1px">{mini_b}</div>
           </td>
           <td style="{cell}text-align:center;font-weight:700;color:#ef4444">{r["count"]}次</td>
+          <td style="{cell}text-align:center;color:#475569">{r["front_count"]}次</td>
           <td style="{cell}text-align:center;color:#475569">{r["best"]}球</td>
           <td style="{cell}text-align:center;color:#475569">{avg:.2f}球</td>
         </tr>'''
 
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">
-      两两合并号码并去重，单期命中 ≥{threshold} 球计 1 次 · 按次数取 Top {limit} · 小字为{target_text}未开奖预测
+      两两合并号码并去重，单期总球数 >{threshold - 1} 或前区总球数 >{threshold - 1} 分别计 1 次 · 按总球数次数取 Top {limit} · 小字为{target_text}未开奖预测
     </div>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
       <thead><tr style="background:#f8fafc">
         <th style="{head}text-align:center">#</th>
         <th style="{head}text-align:left">组合与最新预测</th>
-        <th style="{head}text-align:center">≥{threshold}球次数</th>
+        <th style="{head}text-align:center">总球数>{threshold - 1}</th>
+        <th style="{head}text-align:center">前区总球数>{threshold - 1}</th>
         <th style="{head}text-align:center">单期最高</th>
         <th style="{head}text-align:center">平均命中</th>
       </tr></thead>
@@ -553,9 +558,12 @@ def _build_latest_ranking_html(hist, limit=8):
     cell = "padding:4px 6px;font-size:11px;line-height:1.5;"
     head = "padding:4px 6px;color:#64748b;font-size:10px;font-weight:600;background:#f8fafc;"
 
-    # 按 后区命中 → 本期命中数 排序
+    # 按 总命中球数 → 后区命中数 → 前区命中数 排序
     latest_arr = [s for s in stats.values() if s["current"] > 0]
-    latest_arr.sort(key=lambda x: (x["backHit"], x["current"]), reverse=True)
+    latest_arr.sort(
+        key=lambda x: (x["current"], x["backHit"], x["currentFront"]),
+        reverse=True,
+    )
     latest_top = latest_arr[:limit]
 
     rows = ""
@@ -785,8 +793,8 @@ def build_html_digest(data, warnings, generated_at, commit_info=None):
         {_build_latest_ranking_html(hist, limit=8)}
         {_SECTION.format("📈 历史累计排行 Top 8")}
         {_build_history_ranking_html(hist, pred, limit=8)}
-        {_SECTION.format("📈 模型分组统计 Top 8")}
-        {_build_model_group_html(hist, limit=8)}
+        {_SECTION.format("📈 模型分组统计 Top 10")}
+        {_build_model_group_html(hist, limit=10)}
         {_SECTION.format("🏅 最佳组合")}
         {_build_best_combo_html(hist, pred, limit=10)}
         {_SECTION.format("🏅 最蓝组合")}
