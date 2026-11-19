@@ -18,7 +18,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from strategies.selection import rank_strategies
 from freshness import check_freshness
 
 HISTORY_FILE     = os.path.join(BASE_DIR, "data", "lottery_history.json")
@@ -115,10 +114,10 @@ def validate_data(data):
 _SECTION = '<h2 style="font-size:14px;color:#0f172a;font-weight:700;border-left:3px solid #3b82f6;padding-left:10px;margin:18px 0 10px;letter-spacing:0.2px">{}</h2>'
 
 
-def _ball(num, color):
+def _ball(num, color, size=24, font_size=11):
     # 前区用红色，后区用蓝色（视觉区分）
     bg = "#ef4444" if color == "front" else "#3b82f6"
-    return f'<span style="display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;border-radius:50%;background:{bg};color:#fff;font-size:11px;font-weight:700;margin:0 1.5px">{num}</span>'
+    return f'<span style="display:inline-block;width:{size}px;height:{size}px;line-height:{size}px;text-align:center;border-radius:50%;background:{bg};color:#fff;font-size:{font_size}px;font-weight:700;margin:0 1.5px">{num}</span>'
 
 
 def _build_latest_draw_html(latest, nd):
@@ -221,6 +220,7 @@ def _collect_ranking_stats(records):
                 s = stats.get(key)
                 if s is None:
                     s = stats[key] = {
+                        "model_id": m.get("model_id", ""),
                         "model": model_name,
                         "strategy": pred.get("strategy", "—"),
                         "total": 0, "best": 0, "games": 0,
@@ -586,8 +586,8 @@ def _build_latest_ranking_html(hist, limit=8):
     </table>'''
 
 
-def _build_history_ranking_html(hist, limit=8):
-    """历史累计命中排行 Top N（仅表格）"""
+def _build_history_ranking_html(hist, pred=None, limit=8):
+    """历史累计命中排行 Top N（含本期推荐号码）"""
     records = hist.get("predictions_history", []) if hist else []
     if not records:
         return '<p style="color:#94a3b8;font-size:11px;padding:10px">(暂无命中记录)</p>'
@@ -596,6 +596,12 @@ def _build_history_ranking_html(hist, limit=8):
     dense_cell = "padding:4px 4px;font-size:10px;line-height:1.5;"
     dense_head = "padding:4px 4px;color:#64748b;font-size:10px;font-weight:600;background:#f8fafc;"
 
+    # 当前预测：按 模型+策略 查最新推荐号码
+    current = {}
+    for m in (pred or {}).get("models", []):
+        for g in m.get("predictions", []):
+            current[(m.get("model_id"), g.get("strategy"))] = g
+
     # 按 总球数 → 累计后区 排序
     hist_arr = sorted(stats.values(), key=lambda x: (x["total"], x["totalBack"]), reverse=True)
     hist_top = hist_arr[:limit]
@@ -603,16 +609,22 @@ def _build_history_ranking_html(hist, limit=8):
     rows = ""
     for i, r in enumerate(hist_top):
         bg = _row_bg(i)
+        group = current.get((r.get("model_id"), r["strategy"]))
+        if group:
+            fronts = "".join(_ball(b, "front", size=20, font_size=9) for b in group.get("front_balls", []))
+            backs = "".join(_ball(b, "back", size=20, font_size=9) for b in group.get("back_balls", []))
+            numbers = f'{fronts}<span style="color:#94a3b8;margin:0 2px">|</span>{backs}'
+        else:
+            numbers = '<span style="color:#94a3b8">—</span>'
         rows += f'''
         <tr style="background:{bg}">
           <td style="{dense_cell}text-align:center;font-weight:700">{_medal(i)}</td>
           <td style="{dense_cell}font-weight:600;color:#0f172a">{r["model"]}</td>
           <td style="{dense_cell}color:#475569">{r["strategy"]}</td>
+          <td style="{dense_cell}white-space:nowrap">{numbers}</td>
           <td style="{dense_cell}text-align:center;color:#475569">{r["best"]}球</td>
           <td style="{dense_cell}text-align:center;color:#475569">{r["totalFront"]}球</td>
           <td style="{dense_cell}text-align:center;color:#3b82f6;font-weight:600">{r["totalBack"]}球</td>
-          <td style="{dense_cell}text-align:center;color:#475569">{r["currentFront"]}球</td>
-          <td style="{dense_cell}text-align:center;color:#ef4444;font-weight:600">{r["maxFront"]}球</td>
           <td style="{dense_cell}text-align:center;color:#475569">{r["games"]}期</td>
         </tr>'''
 
@@ -622,11 +634,10 @@ def _build_history_ranking_html(hist, limit=8):
         <th style="{dense_head}text-align:center">#</th>
         <th style="{dense_head}text-align:left">模型</th>
         <th style="{dense_head}text-align:left">策略</th>
+        <th style="{dense_head}text-align:left;white-space:nowrap">推荐号码</th>
         <th style="{dense_head}text-align:center">历史最多</th>
         <th style="{dense_head}text-align:center">累计前区</th>
         <th style="{dense_head}text-align:center">累计后区</th>
-        <th style="{dense_head}text-align:center">本期前区</th>
-        <th style="{dense_head}text-align:center">单期最多前区</th>
         <th style="{dense_head}text-align:center">期数</th>
       </tr></thead>
       <tbody>{rows}</tbody>
@@ -701,99 +712,6 @@ def _build_model_group_html(hist, limit=8):
     </table>'''
 
 
-def _build_recommendations_html(pred, hist, latest_period="", next_period="", limit=10):
-    """本期推荐 — 按历史累计命中挑选 Top N 个「模型+策略」组合"""
-    if not pred or not pred.get("models"):
-        return '<p style="color:#94a3b8;font-size:11px">(暂无预测数据)</p>'
-
-    records = hist.get("predictions_history", []) if hist else []
-    current = {}
-    for m in pred["models"]:
-        for g in m.get("predictions", []):
-            current[(m.get("model_id"), g.get("strategy"))] = (m, g)
-
-    picks = []
-    used_keys = set()
-    seen_numbers = set()
-
-    def add_pick(model, group, entry=None):
-        key = (model.get("model_id"), group.get("strategy"))
-        signature = (
-            tuple(group.get("front_balls", [])),
-            tuple(group.get("back_balls", [])),
-        )
-        # 同一模型+策略不重复；号码完全相同的组合自动顺延到下一名
-        if key in used_keys or signature in seen_numbers:
-            return False
-        used_keys.add(key)
-        seen_numbers.add(signature)
-        picks.append((model, group, entry))
-        return True
-
-    # 优先使用历史累计命中最高的模型+策略
-    for entry in rank_strategies(records):
-        item = current.get((entry["model_id"], entry["strategy"]))
-        if not item:
-            continue
-        add_pick(item[0], item[1], entry)
-        if len(picks) >= limit:
-            break
-
-    # 历史数据不足时用当前预测补齐
-    if len(picks) < limit:
-        for m in pred["models"]:
-            for g in m.get("predictions", []):
-                add_pick(m, g)
-                if len(picks) >= limit:
-                    break
-            if len(picks) >= limit:
-                break
-
-    if not picks:
-        return '<p style="color:#94a3b8;font-size:11px">(暂无可推荐预测)</p>'
-
-    cell = "padding:4px 6px;font-size:11px;line-height:1.5;"
-    head = "padding:4px 6px;color:#64748b;font-size:10px;font-weight:600;background:#f8fafc;"
-    rows = ""
-    for i, (model, group, entry) in enumerate(picks, 1):
-        fronts = "".join(_ball(b, "front") for b in group.get("front_balls", []))
-        backs = "".join(_ball(b, "back") for b in group.get("back_balls", []))
-        if entry:
-            basis = f'{entry["total_hits"]}球 / {entry["games"]}期'
-        else:
-            basis = "—"
-        bg = _row_bg(i - 1)
-        rows += f'''
-        <tr style="background:{bg}">
-          <td style="{cell}text-align:center;font-weight:700">{_medal(i - 1)}</td>
-          <td style="{cell}font-weight:600;color:#0f172a">{model.get("model_name", "—")}</td>
-          <td style="{cell}color:#475569">{group.get("strategy", "—")}</td>
-          <td style="{cell}white-space:nowrap">{fronts}<span style="color:#94a3b8;margin:0 3px">|</span>{backs}</td>
-          <td style="{cell}text-align:center;color:#3b82f6;font-weight:600;white-space:nowrap">{basis}</td>
-        </tr>'''
-    table = f'''
-    <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
-      <thead><tr style="background:#f8fafc">
-        <th style="{head}text-align:center">#</th>
-        <th style="{head}text-align:left">模型</th>
-        <th style="{head}text-align:left">策略</th>
-        <th style="{head}text-align:left">推荐号码</th>
-        <th style="{head}text-align:center;white-space:nowrap">历史累计</th>
-      </tr></thead>
-      <tbody>{rows}</tbody>
-    </table>'''
-
-    period_line = ""
-    if latest_period or next_period:
-        period_line = (
-            f'<div style="font-size:11px;color:#64748b;margin-bottom:8px">'
-            f'基于第 {latest_period or "—"} 期开奖 · 目标第 {next_period or "—"} 期 · '
-            f'按历史累计命中排序 · Top {limit}（同号去重）</div>'
-        )
-
-    return period_line + table
-
-
 def build_html_digest(data, warnings, generated_at, commit_info=None):
     """
     构建 HTML 邮件正文。
@@ -863,12 +781,10 @@ def build_html_digest(data, warnings, generated_at, commit_info=None):
         {_build_latest_draw_html(latest, nd)}
         {_SECTION.format("🎯 单球命中")}
         {_build_ball_hit_html(hist.get("predictions_history", []))}
-        {_SECTION.format("🔮 本期推荐 Top 10")}
-        {_build_recommendations_html(pred, hist, latest_period, next_period, limit=10)}
         {_SECTION.format("🏆 最新一期 Top 8")}
         {_build_latest_ranking_html(hist, limit=8)}
         {_SECTION.format("📈 历史累计排行 Top 8")}
-        {_build_history_ranking_html(hist, limit=8)}
+        {_build_history_ranking_html(hist, pred, limit=8)}
         {_SECTION.format("📈 模型分组统计 Top 8")}
         {_build_model_group_html(hist, limit=8)}
         {_SECTION.format("🏅 最佳组合")}
