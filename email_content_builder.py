@@ -476,8 +476,10 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
         <tr style="background:{bg}">
           <td style="{cell}text-align:center;font-weight:700">{_medal(i)}</td>
           <td style="{cell}">
-            <div style="font-weight:600;color:#0f172a;white-space:nowrap">{label_a}<span style="margin-left:5px;font-weight:400">{mini_a}</span></div>
-            <div style="font-weight:600;color:#0f172a;white-space:nowrap;margin-top:2px">+ {label_b}<span style="margin-left:5px;font-weight:400">{mini_b}</span></div>
+            <div style="font-weight:600;color:#0f172a">{label_a}</div>
+            <div style="margin-top:1px">{mini_a}</div>
+            <div style="font-weight:600;color:#0f172a;margin-top:4px">+ {label_b}</div>
+            <div style="margin-top:1px">{mini_b}</div>
           </td>
           <td style="{cell}text-align:center;color:#475569">{r["front_count"]}次</td>
           <td style="{cell}text-align:center;color:#475569">{r["best"]}球</td>
@@ -489,7 +491,7 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
     )
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">
-      两两合并号码并去重，单期前区总球数 ≥{front_threshold} 计 1 次 · 按次数取 Top {limit} · 每行一组，号码为{target_text}未开奖预测
+      两两合并号码并去重，单期前区总球数 ≥{front_threshold} 计 1 次 · 按次数取 Top {limit} · 小字为{target_text}未开奖预测
     </div>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
       <thead><tr style="background:#f8fafc">
@@ -599,10 +601,10 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
         for idx, key in enumerate(r["keys"]):
             label = r["labels"].get(key, "—")
             mini = _mini(current.get(key))
-            prefix = "+ " if idx else ""
-            margin = "margin-top:2px;" if idx else ""
+            margin = "margin-top:4px;" if idx else ""
             blocks += f'''
-            <div style="font-weight:600;color:#0f172a;white-space:nowrap;{margin}">{prefix}{label}<span style="margin-left:5px;font-weight:400">{mini}</span></div>'''
+            <div style="font-weight:600;color:#0f172a;{margin}">{label}</div>
+            <div style="margin-top:1px">{mini}</div>'''
         body += f'''
         <tr style="background:{bg}">
           <td style="{cell}text-align:center;font-weight:700">{_medal(i)}</td>
@@ -617,7 +619,7 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
     )
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">
-      两组不同模型+策略后区蓝球合并去重，单期覆盖 {threshold} 个蓝球计 1 次 · 按次数取 Top {limit} · 每行一组，号码为{target_text}未开奖预测
+      两组不同模型+策略后区蓝球合并去重，单期覆盖 {threshold} 个蓝球计 1 次 · 按次数取 Top {limit} · 小字为{target_text}未开奖预测
     </div>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
       <thead><tr style="background:#f8fafc">
@@ -632,7 +634,7 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
     {index_html}'''
 
 
-def _build_latest_ranking_html(hist, limit=10):
+def _build_latest_ranking_html(hist, limit=8):
     """最新一期命中排行 Top N（仅表格）"""
     records = hist.get("predictions_history", []) if hist else []
     if not records:
@@ -678,22 +680,21 @@ def _build_latest_ranking_html(hist, limit=10):
     </table>'''
 
 
-def _build_history_ranking_html(hist, pred=None, limit=10):
+def _build_history_ranking_html(hist, pred=None, limit=8):
     """历史累计命中排行 Top N（含本期推荐号码）"""
     records = hist.get("predictions_history", []) if hist else []
     if not records:
         return '<p style="color:#94a3b8;font-size:11px;padding:10px">(暂无命中记录)</p>'
 
     stats = _collect_ranking_stats(records)
-    dense_cell = "padding:3px 4px;font-size:10px;line-height:1.3;white-space:nowrap;"
-    dense_head = "padding:3px 4px;color:#64748b;font-size:9px;font-weight:600;background:#f8fafc;white-space:nowrap;"
+    dense_cell = "padding:4px 4px;font-size:10px;line-height:1.5;"
+    dense_head = "padding:4px 4px;color:#64748b;font-size:10px;font-weight:600;background:#f8fafc;"
 
-    # 当前预测：按 模型+策略 查最新推荐号码；G编号用于策略简写
+    # 当前预测：按 模型+策略 查最新推荐号码
     current = {}
     for m in (pred or {}).get("models", []):
         for g in m.get("predictions", []):
             current[(m.get("model_id"), g.get("strategy"))] = g
-    group_map = _build_group_map(pred)
 
     # 按 总球数 → 累计后区 排序
     hist_arr = sorted(stats.values(), key=lambda x: (x["total"], x["totalBack"]), reverse=True)
@@ -702,37 +703,35 @@ def _build_history_ranking_html(hist, pred=None, limit=10):
     rows = ""
     for i, r in enumerate(hist_top):
         bg = _row_bg(i)
-        mid = r.get("model_id")
-        gid = group_map.get(mid, {}).get(r["strategy"])
-        label = (f'{_short_model_name(mid, r["model"])}·{gid}' if gid
-                 else f'{_short_model_name(mid, r["model"])}·{r["strategy"][:4]}')
-        group = current.get((mid, r["strategy"]))
+        group = current.get((r.get("model_id"), r["strategy"]))
         if group:
-            fronts = "".join(_ball(b, "front", size=16, font_size=8) for b in group.get("front_balls", []))
-            backs = "".join(_ball(b, "back", size=16, font_size=8) for b in group.get("back_balls", []))
-            numbers = f'{fronts}<span style="color:#94a3b8;margin:0 1px">|</span>{backs}'
+            fronts = "".join(_ball(b, "front", size=20, font_size=9) for b in group.get("front_balls", []))
+            backs = "".join(_ball(b, "back", size=20, font_size=9) for b in group.get("back_balls", []))
+            numbers = f'{fronts}<span style="color:#94a3b8;margin:0 2px">|</span>{backs}'
         else:
             numbers = '<span style="color:#94a3b8">—</span>'
         rows += f'''
         <tr style="background:{bg}">
           <td style="{dense_cell}text-align:center;font-weight:700">{_medal(i)}</td>
-          <td style="{dense_cell}font-weight:600;color:#0f172a">{label}</td>
-          <td style="{dense_cell}">{numbers}</td>
-          <td style="{dense_cell}text-align:center;color:#475569">{r["best"]}</td>
-          <td style="{dense_cell}text-align:center;color:#475569">{r["totalFront"]}</td>
-          <td style="{dense_cell}text-align:center;color:#3b82f6;font-weight:600">{r["totalBack"]}</td>
-          <td style="{dense_cell}text-align:center;color:#475569">{r["games"]}</td>
+          <td style="{dense_cell}font-weight:600;color:#0f172a">{r["model"]}</td>
+          <td style="{dense_cell}color:#475569">{r["strategy"]}</td>
+          <td style="{dense_cell}white-space:nowrap">{numbers}</td>
+          <td style="{dense_cell}text-align:center;color:#475569">{r["best"]}球</td>
+          <td style="{dense_cell}text-align:center;color:#475569">{r["totalFront"]}球</td>
+          <td style="{dense_cell}text-align:center;color:#3b82f6;font-weight:600">{r["totalBack"]}球</td>
+          <td style="{dense_cell}text-align:center;color:#475569">{r["games"]}期</td>
         </tr>'''
 
     return f'''
     <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:12px">
       <thead><tr style="background:#f8fafc">
         <th style="{dense_head}text-align:center">#</th>
-        <th style="{dense_head}text-align:left">模型·策略</th>
-        <th style="{dense_head}text-align:left">推荐号码</th>
-        <th style="{dense_head}text-align:center">最高</th>
-        <th style="{dense_head}text-align:center">累计前</th>
-        <th style="{dense_head}text-align:center">累计后</th>
+        <th style="{dense_head}text-align:left">模型</th>
+        <th style="{dense_head}text-align:left">策略</th>
+        <th style="{dense_head}text-align:left;white-space:nowrap">推荐号码</th>
+        <th style="{dense_head}text-align:center">历史最多</th>
+        <th style="{dense_head}text-align:center">累计前区</th>
+        <th style="{dense_head}text-align:center">累计后区</th>
         <th style="{dense_head}text-align:center">期数</th>
       </tr></thead>
       <tbody>{rows}</tbody>
@@ -876,10 +875,10 @@ def build_html_digest(data, warnings, generated_at, commit_info=None):
         {_build_latest_draw_html(latest, nd)}
         {_SECTION.format("🎯 单球命中")}
         {_build_ball_hit_html(hist.get("predictions_history", []))}
-        {_SECTION.format("🏆 最新一期 Top 10")}
-        {_build_latest_ranking_html(hist, limit=10)}
-        {_SECTION.format("📈 历史累计排行 Top 10")}
-        {_build_history_ranking_html(hist, pred, limit=10)}
+        {_SECTION.format("🏆 最新一期 Top 8")}
+        {_build_latest_ranking_html(hist, limit=8)}
+        {_SECTION.format("📈 历史累计排行 Top 8")}
+        {_build_history_ranking_html(hist, pred, limit=8)}
         {_SECTION.format("📈 模型分组统计 Top 10")}
         {_build_model_group_html(hist, limit=10)}
         {_SECTION.format("🏅 最佳组合")}
