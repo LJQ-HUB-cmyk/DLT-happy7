@@ -299,7 +299,7 @@ def _collect_ranking_stats(records):
                         "strategy": pred.get("strategy", "—"),
                         "total": 0, "best": 0, "games": 0,
                         "current": 0, "currentFront": 0, "backHit": 0,
-                        "frontHits": "", "totalFront": 0, "totalBack": 0,
+                        "frontHits": "", "backHits": "", "totalFront": 0, "totalBack": 0,
                         "maxFront": 0,
                     }
                 total = hr.get("total_hits", 0)
@@ -318,6 +318,8 @@ def _collect_ranking_stats(records):
                     s["backHit"] = back
                     front_hits = hr.get("front_hits", [])
                     s["frontHits"] = " ".join(front_hits) if front_hits else "—"
+                    back_hits = hr.get("back_hits", [])
+                    s["backHits"] = " ".join(back_hits) if back_hits else "—"
     return stats
 
 
@@ -653,15 +655,13 @@ def _build_latest_ranking_html(hist, limit=10):
     rows = ""
     for i, r in enumerate(latest_top):
         bg = _row_bg(i)
-        back_mark = f"{r['backHit']}后" if r["backHit"] > 0 else "—"
         rows += f'''
         <tr style="background:{bg}">
           <td style="{cell}text-align:center;font-weight:700">{_medal(i)}</td>
           <td style="{cell}font-weight:600;color:#0f172a">{r["model"]}</td>
           <td style="{cell}color:#475569">{r["strategy"]}</td>
-          <td style="{cell}text-align:center;font-weight:700;color:#ef4444">{r["current"]}球</td>
           <td style="{cell}color:#2563eb;font-family:monospace">{r["frontHits"]}</td>
-          <td style="{cell}text-align:center;font-weight:700;color:#3b82f6">{back_mark}</td>
+          <td style="{cell}color:#3b82f6;font-family:monospace">{r["backHits"]}</td>
         </tr>'''
 
     return f'''
@@ -670,9 +670,8 @@ def _build_latest_ranking_html(hist, limit=10):
         <th style="{head}text-align:center">#</th>
         <th style="{head}text-align:left">模型</th>
         <th style="{head}text-align:left">策略</th>
-        <th style="{head}text-align:center">本期命中</th>
         <th style="{head}text-align:left">命中前区</th>
-        <th style="{head}text-align:center">后区</th>
+        <th style="{head}text-align:left">命中后区</th>
       </tr></thead>
       <tbody>{rows}</tbody>
     </table>'''
@@ -745,17 +744,15 @@ def _build_model_group_html(hist, limit=8):
     if not records:
         return '<p style="color:#94a3b8;font-size:11px;padding:10px">(暂无命中记录)</p>'
 
-    latest_record = records[0]
     stats = {}
     for rec in records:
-        is_latest = rec is latest_record
         for m in rec.get("models", []):
             name = m.get("model_name", "—")
             s = stats.get(name)
             if s is None:
                 s = stats[name] = {
                     "model": name, "total": 0, "totalFront": 0,
-                    "totalBack": 0, "maxFront": 0, "current": 0,
+                    "totalBack": 0, "maxFront": 0,
                     "periods": set(),
                 }
             s["periods"].add(str(rec.get("target_period", "")))
@@ -769,8 +766,6 @@ def _build_model_group_html(hist, limit=8):
                 s["totalFront"] += front
                 s["totalBack"] += hr.get("back_hit_count", 0)
                 s["maxFront"] = max(s["maxFront"], front)
-                if is_latest:
-                    s["current"] += total
 
     arr = sorted(stats.values(), key=lambda x: (x["total"], x["totalBack"]), reverse=True)[:limit]
     cell = "padding:4px 6px;font-size:11px;line-height:1.5;"
@@ -787,7 +782,6 @@ def _build_model_group_html(hist, limit=8):
           <td style="{cell}text-align:center;color:#475569">{r["totalFront"]}球</td>
           <td style="{cell}text-align:center;color:#3b82f6">{r["totalBack"]}球</td>
           <td style="{cell}text-align:center;color:#ef4444;font-weight:600">{r["maxFront"]}球</td>
-          <td style="{cell}text-align:center;color:#475569">{r["current"]}球</td>
           <td style="{cell}text-align:center;color:#475569">{len(r["periods"])}期</td>
         </tr>'''
 
@@ -800,7 +794,6 @@ def _build_model_group_html(hist, limit=8):
         <th style="{head}text-align:center">累计前区</th>
         <th style="{head}text-align:center">累计后区</th>
         <th style="{head}text-align:center">单期最多前区</th>
-        <th style="{head}text-align:center">本期命中</th>
         <th style="{head}text-align:center">期数</th>
       </tr></thead>
       <tbody>{rows}</tbody>
