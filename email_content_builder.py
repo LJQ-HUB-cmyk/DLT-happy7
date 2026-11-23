@@ -245,42 +245,6 @@ def _build_group_map(pred):
     return mapping
 
 
-def _strategy_index_html(model_ids, pred, hist):
-    """为组合中出现的模型生成 G1/G2/G3 → 策略名 的紧凑索引。"""
-    if not model_ids:
-        return ""
-
-    group_map = _build_group_map(pred)
-    names = {}
-    for m in (pred or {}).get("models", []):
-        names[m.get("model_id", "")] = m.get("model_name", "—")
-    records = (hist or {}).get("predictions_history", [])
-    if records:
-        for m in records[0].get("models", []):
-            names.setdefault(m.get("model_id", ""), m.get("model_name", "—"))
-
-    order = {m.get("model_id"): i for i, m in enumerate((pred or {}).get("models", []))}
-    lines = ""
-    for mid in sorted(model_ids, key=lambda x: order.get(x, 999)):
-        groups = group_map.get(mid)
-        if not groups:
-            continue
-        ordered = sorted(groups.items(), key=lambda kv: kv[1])
-        parts = " · ".join(f"{gid} {strategy}" for strategy, gid in ordered)
-        lines += (
-            f'<div><span style="color:#475569;font-weight:600">'
-            f'{_short_model_name(mid, names.get(mid, "—"))}</span>：{parts}</div>'
-        )
-
-    if not lines:
-        return ""
-    return (
-        '<div style="font-size:9px;color:#94a3b8;line-height:1.6;margin-top:6px">'
-        '<div style="font-weight:600;color:#64748b;margin-bottom:2px">策略索引</div>'
-        f'{lines}</div>'
-    )
-
-
 def _collect_ranking_stats(records):
     """按 模型+策略 汇总命中，附带本期与单期最多前区数据"""
     latest_record = records[0]
@@ -489,9 +453,6 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
           <td style="{cell}text-align:center;color:#475569">{avg:.2f}球</td>
         </tr>'''
 
-    index_html = _strategy_index_html(
-        {key[0] for r in top for key in r["keys"]}, pred, hist
-    )
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">
       两两合并号码并去重，单期前区总球数 ≥{front_threshold} 计 1 次 · 按次数取 Top {limit} · 每行一组，号码为{target_text}未开奖预测
@@ -505,8 +466,7 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
         <th style="{head}text-align:center">平均命中</th>
       </tr></thead>
       <tbody>{body}</tbody>
-    </table>
-    {index_html}'''
+    </table>'''
 
 
 def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
@@ -585,11 +545,8 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
     def _mini(group):
         if not group:
             return '<span style="color:#94a3b8">暂无最新预测</span>'
-        fronts = " ".join(group.get("front_balls", []))
         backs = " ".join(group.get("back_balls", []))
-        return (f'<span style="color:#ef4444">前 {fronts}</span>'
-                f'<span style="color:#cbd5e1"> | </span>'
-                f'<span style="color:#3b82f6">后 {backs}</span>')
+        return f'<span style="color:#3b82f6">后 {backs}</span>'
 
     target_period = (pred or {}).get("target_period", "")
     target_text = f"第 {target_period} 期" if target_period else "最新一期"
@@ -599,7 +556,6 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
     body = ""
     for i, r in enumerate(top):
         bg = _row_bg(i)
-        avg = r["total"] / r["games"] if r["games"] else 0
         blocks = ""
         for idx, key in enumerate(r["keys"]):
             label = r["labels"].get(key, "—")
@@ -613,28 +569,22 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
           <td style="{cell}text-align:center;font-weight:700">{_medal(i)}</td>
           <td style="{cell}">{blocks}</td>
           <td style="{cell}text-align:center;font-weight:700;color:#3b82f6">{r["count"]}次</td>
-          <td style="{cell}text-align:center;color:#475569">{r["best"]}球</td>
-          <td style="{cell}text-align:center;color:#475569">{avg:.2f}球</td>
+          <td style="{cell}text-align:center;color:#475569">{r["total"]}球 / {r["games"]}期</td>
         </tr>'''
 
-    index_html = _strategy_index_html(
-        {key[0] for r in top for key in r["keys"]}, pred, hist
-    )
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">
-      两组不同模型+策略后区蓝球合并去重，单期覆盖 {threshold} 个蓝球计 1 次 · 按次数取 Top {limit} · 每行一组，号码为{target_text}未开奖预测
+      两组不同模型+策略后区蓝球合并去重，单期覆盖 {threshold} 个蓝球计 1 次 · 按次数取 Top {limit} · 每行一组，号码仅显示{target_text}后区未开奖预测
     </div>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
       <thead><tr style="background:#f8fafc">
         <th style="{head}text-align:center">#</th>
-        <th style="{head}text-align:left">组合与最新预测</th>
+        <th style="{head}text-align:left">组合与后区预测</th>
         <th style="{head}text-align:center">{threshold}蓝球次数</th>
-        <th style="{head}text-align:center">单期最高蓝球</th>
-        <th style="{head}text-align:center">平均蓝球</th>
+        <th style="{head}text-align:center">累计蓝球 / 期数</th>
       </tr></thead>
       <tbody>{body}</tbody>
-    </table>
-    {index_html}'''
+    </table>'''
 
 
 def _build_latest_ranking_html(hist, limit=10):
@@ -898,11 +848,11 @@ class _Canvas:
                 + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
-def _collect_dedup_trend(hist, periods=10, top_n=5):
-    """每期每模型：3 种策略的前/后区号码合并去重后，对当期开奖的命中球数。
+def _collect_strategy_trend(hist, periods=10, top_n=3):
+    """每期每个「模型+策略」：该组号码对当期开奖的命中球数（前区+后区）。
 
-    返回 (期号列表[旧→新], 系列列表)。系列按近 N 期去重总和降序取前 top_n，
-    某期该模型无记录时值为 None（折线在该处断开）。
+    返回 (期号列表[旧→新], 系列列表)。系列按近 N 期命中总和降序取前 top_n，
+    某期该策略无记录时值为 None（折线在该处断开）。
     """
     records = list((hist or {}).get("predictions_history") or [])[:periods]
     if len(records) < 2:
@@ -919,29 +869,30 @@ def _collect_dedup_trend(hist, periods=10, top_n=5):
         actual_back = set(actual.get("back_balls") or [])
         for m in rec.get("models") or []:
             mid = m.get("model_id") or m.get("model_name") or "?"
-            names.setdefault(mid, m.get("model_name") or mid)
-            union_front, union_back, seen = set(), set(), False
+            mname = m.get("model_name") or mid
             for g in m.get("predictions") or []:
-                if g.get("front_balls") or g.get("back_balls"):
-                    seen = True
-                union_front.update(g.get("front_balls") or [])
-                union_back.update(g.get("back_balls") or [])
-            if not seen:
-                continue
-            values.setdefault(mid, {})[p] = (len(union_front & actual_front)
-                                             + len(union_back & actual_back))
+                strategy = g.get("strategy") or "—"
+                key = (mid, strategy)
+                names.setdefault(key, f"{_short_model_name(mid, mname)}·{strategy}")
+                hr = g.get("hit_result") or {}
+                total = hr.get("total_hits")
+                if total is None:  # 兜底：直接按号码计算
+                    total = (len(set(g.get("front_balls") or []) & actual_front)
+                             + len(set(g.get("back_balls") or []) & actual_back))
+                values.setdefault(key, {})[p] = total
 
     ranked = sorted(
         values,
-        key=lambda mid: (-sum(values[mid].values()), names.get(mid, "")),
+        key=lambda key: (-sum(values[key].values()), names.get(key, "")),
     )[:top_n]
 
     series = []
-    for i, mid in enumerate(ranked):
-        vals = [values[mid].get(p) for p in period_labels]
+    for i, key in enumerate(ranked):
+        vals = [values[key].get(p) for p in period_labels]
         series.append({
-            "model_id": mid,
-            "name": names.get(mid, mid),
+            "model_id": key[0],
+            "strategy": key[1],
+            "name": names.get(key, "—"),
             "values": vals,
             "total": sum(v for v in vals if v is not None),
             "color": _TREND_COLORS[i % len(_TREND_COLORS)],
@@ -998,16 +949,16 @@ def _render_trend_png(period_labels, series, scale=2):
     return cv.png()
 
 
-def _build_trend_chart_html(hist, periods=10, top_n=5, inline_images=None,
+def _build_trend_chart_html(hist, periods=10, top_n=3, inline_images=None,
                             cid="model-trend-chart"):
-    """模型去重命中趋势折线图（Top 5 模型 × 近 10 期）。
+    """模型+策略命中趋势折线图（Top 3 模型+策略 × 近 10 期）。
 
     inline_images 为 None 时使用 data URI（便于预览/测试）；否则写入
     inline_images 列表并使用 CID 引用，由邮件发送层内嵌。
     """
-    labels, series = _collect_dedup_trend(hist, periods, top_n)
+    labels, series = _collect_strategy_trend(hist, periods, top_n)
     if len(labels) < 2 or not series:
-        return '<p style="color:#94a3b8;font-size:11px;padding:10px">(暂无足够的去重命中记录)</p>'
+        return '<p style="color:#94a3b8;font-size:11px;padding:10px">(暂无足够的命中记录)</p>'
 
     png = _render_trend_png(labels, series)
     if inline_images is None:
@@ -1031,11 +982,11 @@ def _build_trend_chart_html(hist, periods=10, top_n=5, inline_images=None,
 
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px;line-height:1.5">
-      每个模型 3 种策略前/后区号码合并去重后的单期命中球数 · 近 {len(labels)} 期
-      （横轴为各期期号后三位）· 按去重总和取 Top {len(series)}
+      每个「模型+策略」单期命中球数（前区+后区）· 近 {len(labels)} 期
+      （横轴为各期期号后三位）· 按命中总和取 Top {len(series)}
     </div>
     <div style="text-align:center;margin-bottom:6px">
-      <img src="{src}" width="540" height="190" alt="模型去重命中趋势折线图"
+      <img src="{src}" width="540" height="190" alt="模型+策略命中趋势折线图"
            style="display:inline-block;width:540px;max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:8px">
     </div>
     <div style="margin-bottom:10px">{legend}</div>'''
@@ -1118,8 +1069,8 @@ def build_html_digest(data, warnings, generated_at, commit_info=None, inline_ima
         {_build_history_ranking_html(hist, pred, limit=10)}
         {_SECTION.format("📈 模型分组统计 Top 10")}
         {_build_model_group_html(hist, limit=10)}
-        {_SECTION.format("📉 模型去重命中趋势（近 10 期）")}
-        {_build_trend_chart_html(hist, periods=10, top_n=5, inline_images=inline_images)}
+        {_SECTION.format("📉 模型+策略命中趋势（近 10 期）")}
+        {_build_trend_chart_html(hist, periods=10, top_n=3, inline_images=inline_images)}
         {_SECTION.format("🏅 最佳组合")}
         {_build_best_combo_html(hist, pred, limit=10)}
         {_SECTION.format("🏅 最蓝组合")}
