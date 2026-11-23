@@ -898,11 +898,11 @@ class _Canvas:
                 + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
 
 
-def _collect_dedup_trend(hist, periods=10, top_n=5):
-    """每期每模型：3 种策略的前/后区号码合并去重后，对当期开奖的命中球数。
+def _collect_strategy_trend(hist, periods=10, top_n=3):
+    """每期每个「模型+策略」：该组号码对当期开奖的命中球数（前区+后区）。
 
-    返回 (期号列表[旧→新], 系列列表)。系列按近 N 期去重总和降序取前 top_n，
-    某期该模型无记录时值为 None（折线在该处断开）。
+    返回 (期号列表[旧→新], 系列列表)。系列按近 N 期命中总和降序取前 top_n，
+    某期该策略无记录时值为 None（折线在该处断开）。
     """
     records = list((hist or {}).get("predictions_history") or [])[:periods]
     if len(records) < 2:
@@ -919,29 +919,30 @@ def _collect_dedup_trend(hist, periods=10, top_n=5):
         actual_back = set(actual.get("back_balls") or [])
         for m in rec.get("models") or []:
             mid = m.get("model_id") or m.get("model_name") or "?"
-            names.setdefault(mid, m.get("model_name") or mid)
-            union_front, union_back, seen = set(), set(), False
+            mname = m.get("model_name") or mid
             for g in m.get("predictions") or []:
-                if g.get("front_balls") or g.get("back_balls"):
-                    seen = True
-                union_front.update(g.get("front_balls") or [])
-                union_back.update(g.get("back_balls") or [])
-            if not seen:
-                continue
-            values.setdefault(mid, {})[p] = (len(union_front & actual_front)
-                                             + len(union_back & actual_back))
+                strategy = g.get("strategy") or "—"
+                key = (mid, strategy)
+                names.setdefault(key, f"{_short_model_name(mid, mname)}·{strategy}")
+                hr = g.get("hit_result") or {}
+                total = hr.get("total_hits")
+                if total is None:  # 兜底：直接按号码计算
+                    total = (len(set(g.get("front_balls") or []) & actual_front)
+                             + len(set(g.get("back_balls") or []) & actual_back))
+                values.setdefault(key, {})[p] = total
 
     ranked = sorted(
         values,
-        key=lambda mid: (-sum(values[mid].values()), names.get(mid, "")),
+        key=lambda key: (-sum(values[key].values()), names.get(key, "")),
     )[:top_n]
 
     series = []
-    for i, mid in enumerate(ranked):
-        vals = [values[mid].get(p) for p in period_labels]
+    for i, key in enumerate(ranked):
+        vals = [values[key].get(p) for p in period_labels]
         series.append({
-            "model_id": mid,
-            "name": names.get(mid, mid),
+            "model_id": key[0],
+            "strategy": key[1],
+            "name": names.get(key, "—"),
             "values": vals,
             "total": sum(v for v in vals if v is not None),
             "color": _TREND_COLORS[i % len(_TREND_COLORS)],
@@ -998,16 +999,16 @@ def _render_trend_png(period_labels, series, scale=2):
     return cv.png()
 
 
-def _build_trend_chart_html(hist, periods=10, top_n=5, inline_images=None,
+def _build_trend_chart_html(hist, periods=10, top_n=3, inline_images=None,
                             cid="model-trend-chart"):
-    """模型去重命中趋势折线图（Top 5 模型 × 近 10 期）。
+    """模型+策略命中趋势折线图（Top 3 模型+策略 × 近 10 期）。
 
     inline_images 为 None 时使用 data URI（便于预览/测试）；否则写入
     inline_images 列表并使用 CID 引用，由邮件发送层内嵌。
     """
-    labels, series = _collect_dedup_trend(hist, periods, top_n)
+    labels, series = _collect_strategy_trend(hist, periods, top_n)
     if len(labels) < 2 or not series:
-        return '<p style="color:#94a3b8;font-size:11px;padding:10px">(暂无足够的去重命中记录)</p>'
+        return '<p style="color:#94a3b8;font-size:11px;padding:10px">(暂无足够的命中记录)</p>'
 
     png = _render_trend_png(labels, series)
     if inline_images is None:
@@ -1031,11 +1032,11 @@ def _build_trend_chart_html(hist, periods=10, top_n=5, inline_images=None,
 
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px;line-height:1.5">
-      每个模型 3 种策略前/后区号码合并去重后的单期命中球数 · 近 {len(labels)} 期
-      （横轴为各期期号后三位）· 按去重总和取 Top {len(series)}
+      每个「模型+策略」单期命中球数（前区+后区）· 近 {len(labels)} 期
+      （横轴为各期期号后三位）· 按命中总和取 Top {len(series)}
     </div>
     <div style="text-align:center;margin-bottom:6px">
-      <img src="{src}" width="540" height="190" alt="模型去重命中趋势折线图"
+      <img src="{src}" width="540" height="190" alt="模型+策略命中趋势折线图"
            style="display:inline-block;width:540px;max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:8px">
     </div>
     <div style="margin-bottom:10px">{legend}</div>'''
@@ -1118,8 +1119,8 @@ def build_html_digest(data, warnings, generated_at, commit_info=None, inline_ima
         {_build_history_ranking_html(hist, pred, limit=10)}
         {_SECTION.format("📈 模型分组统计 Top 10")}
         {_build_model_group_html(hist, limit=10)}
-        {_SECTION.format("📉 模型去重命中趋势（近 10 期）")}
-        {_build_trend_chart_html(hist, periods=10, top_n=5, inline_images=inline_images)}
+        {_SECTION.format("📉 模型+策略命中趋势（近 10 期）")}
+        {_build_trend_chart_html(hist, periods=10, top_n=3, inline_images=inline_images)}
         {_SECTION.format("🏅 最佳组合")}
         {_build_best_combo_html(hist, pred, limit=10)}
         {_SECTION.format("🏅 最蓝组合")}
