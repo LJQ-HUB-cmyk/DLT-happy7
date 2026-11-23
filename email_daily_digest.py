@@ -47,14 +47,15 @@ def main():
     print("\n📝 组装邮件内容...")
     BJ_TIME = datetime.now(timezone(timedelta(hours=8)))
     now = BJ_TIME.strftime("%Y-%m-%d %H:%M")
-    body = build_html_digest(data, warnings, generated_at=now)
+    inline_images = []
+    body = build_html_digest(data, warnings, generated_at=now, inline_images=inline_images)
     today = BJ_TIME.strftime("%Y-%m-%d")
     subject = f"[大乐透] 每日汇总 · {today}"
     print("  ✓ 内容组装完成")
 
     # 5. 发送
     print("\n📤 发送邮件...")
-    send_email(subject, body, cfg)
+    send_email(subject, body, cfg, inline_images=inline_images)
 
     print("\n" + "=" * 50)
     print("🎉 邮件汇总完成！")

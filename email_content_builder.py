@@ -12,6 +12,9 @@
 import os
 import sys
 import json
+import base64
+import struct
+import zlib
 from itertools import combinations
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -800,7 +803,245 @@ def _build_model_group_html(hist, limit=8):
     </table>'''
 
 
-def build_html_digest(data, warnings, generated_at, commit_info=None):
+# ==================== 模型去重命中趋势（折线图） ====================
+
+# 折线配色（按近 10 期去重总和排名 1-5）
+_TREND_COLORS = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6"]
+
+# 5x7 点阵数字（仅用于图内坐标轴文字，不依赖系统字体/第三方库）
+_DIGIT_FONT = {
+    "0": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+    "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+    "2": ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
+    "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+    "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+    "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+    "6": ["00110", "01000", "10000", "11110", "10001", "10001", "01110"],
+    "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+    "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+    "9": ["01110", "10001", "10001", "01111", "00001", "00010", "01100"],
+}
+
+
+def _hex_rgb(color):
+    color = color.lstrip("#")
+    return int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+
+
+class _Canvas:
+    """极简 RGB 画布 + 纯标准库 PNG 编码。
+
+    邮件客户端对 SVG / CSS transform 支持不一致，内嵌 PNG（CID）兼容性最好。
+    """
+
+    def __init__(self, w, h, bg=(255, 255, 255)):
+        self.w = w
+        self.h = h
+        self.buf = bytearray(bytes(bg) * (w * h))
+
+    def px(self, x, y, color):
+        if 0 <= x < self.w and 0 <= y < self.h:
+            i = (y * self.w + x) * 3
+            self.buf[i] = color[0]
+            self.buf[i + 1] = color[1]
+            self.buf[i + 2] = color[2]
+
+    def rect(self, x, y, w, h, color):
+        for yy in range(y, y + h):
+            for xx in range(x, x + w):
+                self.px(xx, yy, color)
+
+    def disc(self, cx, cy, r, color):
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                if dx * dx + dy * dy <= r * r:
+                    self.px(cx + dx, cy + dy, color)
+
+    def hline(self, x0, x1, y, color):
+        for x in range(x0, x1 + 1):
+            self.px(x, y, color)
+
+    def line(self, x0, y0, x1, y1, color, thickness=5):
+        steps = max(abs(x1 - x0), abs(y1 - y0))
+        r = max(1, thickness // 2)
+        if steps == 0:
+            self.disc(x0, y0, r, color)
+            return
+        for s in range(steps + 1):
+            t = s / steps
+            self.disc(round(x0 + (x1 - x0) * t), round(y0 + (y1 - y0) * t), r, color)
+
+    def text(self, x, y, text, color, scale=2):
+        cx = x
+        for ch in str(text):
+            pattern = _DIGIT_FONT.get(ch)
+            if pattern:
+                for ry, row in enumerate(pattern):
+                    for rx, bit in enumerate(row):
+                        if bit == "1":
+                            self.rect(cx + rx * scale, y + ry * scale, scale, scale, color)
+            cx += 6 * scale
+
+    def png(self):
+        stride = self.w * 3
+        raw = bytearray()
+        for y in range(self.h):
+            raw.append(0)  # filter type: none
+            raw += self.buf[y * stride:(y + 1) * stride]
+
+        def chunk(tag, data):
+            return (struct.pack(">I", len(data)) + tag + data
+                    + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff))
+
+        ihdr = struct.pack(">IIBBBBB", self.w, self.h, 8, 2, 0, 0, 0)
+        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+                + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+
+
+def _collect_dedup_trend(hist, periods=10, top_n=5):
+    """每期每模型：3 种策略的前/后区号码合并去重后，对当期开奖的命中球数。
+
+    返回 (期号列表[旧→新], 系列列表)。系列按近 N 期去重总和降序取前 top_n，
+    某期该模型无记录时值为 None（折线在该处断开）。
+    """
+    records = list((hist or {}).get("predictions_history") or [])[:periods]
+    if len(records) < 2:
+        return [], []
+
+    chronological = list(reversed(records))  # 旧 → 新，便于作图
+    period_labels = [str(r.get("target_period", "")) for r in chronological]
+    names, values = {}, {}
+
+    for rec in chronological:
+        p = str(rec.get("target_period", ""))
+        actual = rec.get("actual_result") or {}
+        actual_front = set(actual.get("front_balls") or [])
+        actual_back = set(actual.get("back_balls") or [])
+        for m in rec.get("models") or []:
+            mid = m.get("model_id") or m.get("model_name") or "?"
+            names.setdefault(mid, m.get("model_name") or mid)
+            union_front, union_back, seen = set(), set(), False
+            for g in m.get("predictions") or []:
+                if g.get("front_balls") or g.get("back_balls"):
+                    seen = True
+                union_front.update(g.get("front_balls") or [])
+                union_back.update(g.get("back_balls") or [])
+            if not seen:
+                continue
+            values.setdefault(mid, {})[p] = (len(union_front & actual_front)
+                                             + len(union_back & actual_back))
+
+    ranked = sorted(
+        values,
+        key=lambda mid: (-sum(values[mid].values()), names.get(mid, "")),
+    )[:top_n]
+
+    series = []
+    for i, mid in enumerate(ranked):
+        vals = [values[mid].get(p) for p in period_labels]
+        series.append({
+            "model_id": mid,
+            "name": names.get(mid, mid),
+            "values": vals,
+            "total": sum(v for v in vals if v is not None),
+            "color": _TREND_COLORS[i % len(_TREND_COLORS)],
+        })
+    return period_labels, series
+
+
+def _render_trend_png(period_labels, series, scale=2):
+    """绘制折线图 PNG。逻辑尺寸 540×190，按 scale 超采样保证清晰度。"""
+    w, h = 540, 190
+    cv = _Canvas(w * scale, h * scale)
+    left, right, top, bottom = 28, w - 20, 10, h - 30
+    n = len(period_labels)
+    y_max = max(4, max((v for s in series for v in s["values"] if v is not None), default=0))
+    grid_vals = sorted({0, y_max // 2, y_max})
+
+    def x_at(i):
+        return left + (right - left) * i / (n - 1)
+
+    def y_at(v):
+        return bottom - (v / y_max) * (bottom - top)
+
+    grid_color, axis_color, label_color = _hex_rgb("#e2e8f0"), _hex_rgb("#cbd5e1"), _hex_rgb("#94a3b8")
+
+    # 横向网格线 + 纵轴刻度
+    for gv in grid_vals:
+        gy = round(y_at(gv) * scale)
+        cv.hline(left * scale, right * scale, gy, axis_color if gv == 0 else grid_color)
+        txt = str(gv)
+        tw = (len(txt) * 6 - 1) * scale
+        cv.text((left - 5) * scale - tw, gy - 7 * scale // 2 - scale, txt, label_color, scale)
+
+    # 折线（缺失期断开）
+    for s in series:
+        color = _hex_rgb(s["color"])
+        pts = [(round(x_at(i) * scale), None if v is None else round(y_at(v) * scale))
+               for i, v in enumerate(s["values"])]
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if y0 is None or y1 is None:
+                continue
+            cv.line(x0, y0, x1, y1, color, thickness=2 * scale)
+        for x, y in pts:
+            if y is None:
+                continue
+            cv.disc(x, y, 4 * scale, (255, 255, 255))  # 白色描边，避免线条交汇处糊成一片
+            cv.disc(x, y, 3 * scale, color)
+
+    # 横轴期号（后三位，节省空间）
+    for i, label in enumerate(period_labels):
+        txt = str(label)[-3:]
+        tw = (len(txt) * 6 - 1) * scale
+        cv.text(round(x_at(i) * scale) - tw // 2, (bottom + 10) * scale, txt, label_color, scale)
+
+    return cv.png()
+
+
+def _build_trend_chart_html(hist, periods=10, top_n=5, inline_images=None,
+                            cid="model-trend-chart"):
+    """模型去重命中趋势折线图（Top 5 模型 × 近 10 期）。
+
+    inline_images 为 None 时使用 data URI（便于预览/测试）；否则写入
+    inline_images 列表并使用 CID 引用，由邮件发送层内嵌。
+    """
+    labels, series = _collect_dedup_trend(hist, periods, top_n)
+    if len(labels) < 2 or not series:
+        return '<p style="color:#94a3b8;font-size:11px;padding:10px">(暂无足够的去重命中记录)</p>'
+
+    png = _render_trend_png(labels, series)
+    if inline_images is None:
+        src = "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+    else:
+        src = f"cid:{cid}"
+        inline_images.append({
+            "cid": cid, "data": png,
+            "filename": "model-trend.png", "mime": "image/png",
+        })
+
+    legend = ""
+    for s in series:
+        legend += (
+            f'<span style="display:inline-block;margin:0 10px 4px 0;font-size:10px;'
+            f'color:#475569;white-space:nowrap">'
+            f'<span style="display:inline-block;width:8px;height:8px;border-radius:2px;'
+            f'background:{s["color"]};margin-right:4px;vertical-align:middle"></span>'
+            f'{s["name"]} <b style="color:#0f172a">{s["total"]}</b>球</span>'
+        )
+
+    return f'''
+    <div style="font-size:10px;color:#94a3b8;margin-bottom:6px;line-height:1.5">
+      每个模型 3 种策略前/后区号码合并去重后的单期命中球数 · 近 {len(labels)} 期
+      （横轴为各期期号后三位）· 按去重总和取 Top {len(series)}
+    </div>
+    <div style="text-align:center;margin-bottom:6px">
+      <img src="{src}" width="540" height="190" alt="模型去重命中趋势折线图"
+           style="display:inline-block;width:540px;max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:8px">
+    </div>
+    <div style="margin-bottom:10px">{legend}</div>'''
+
+
+def build_html_digest(data, warnings, generated_at, commit_info=None, inline_images=None):
     """
     构建 HTML 邮件正文。
 
@@ -809,6 +1050,8 @@ def build_html_digest(data, warnings, generated_at, commit_info=None):
         warnings: validate_data() 返回的警告列表
         generated_at: 生成时间字符串
         commit_info: 可选，push 通知的提交信息 dict，含 author / message / files / stat
+        inline_images: 可选列表。传入时折线图以 CID 内嵌（需发送层支持），
+                       不传则退回 data URI（便于预览）
     """
     lh = data.get("lottery_history") or {}
     pred = data.get("ai_predictions") or {}
@@ -875,6 +1118,8 @@ def build_html_digest(data, warnings, generated_at, commit_info=None):
         {_build_history_ranking_html(hist, pred, limit=10)}
         {_SECTION.format("📈 模型分组统计 Top 10")}
         {_build_model_group_html(hist, limit=10)}
+        {_SECTION.format("📉 模型去重命中趋势（近 10 期）")}
+        {_build_trend_chart_html(hist, periods=10, top_n=5, inline_images=inline_images)}
         {_SECTION.format("🏅 最佳组合")}
         {_build_best_combo_html(hist, pred, limit=10)}
         {_SECTION.format("🏅 最蓝组合")}

@@ -10,6 +10,7 @@ import os
 import sys
 import smtplib
 from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 
 
@@ -42,17 +43,23 @@ def validate_config(cfg, allow_dry_run=True):
     return True
 
 
-def build_message(subject, body, cfg):
-    """构建 MIME HTML 邮件"""
-    msg = MIMEMultipart("alternative")
+def build_message(subject, body, cfg, inline_images=None):
+    """构建 MIME HTML 邮件。inline_images 非空时以 related 内嵌图片（CID 引用）。"""
+    msg = MIMEMultipart("related" if inline_images else "alternative")
     msg["Subject"] = subject
     msg["From"] = cfg["user"]
     msg["To"] = cfg["recipient"]
     msg.attach(MIMEText(body, "html", "utf-8"))
+    for img in inline_images or []:
+        subtype = (img.get("mime") or "image/png").split("/")[-1]
+        part = MIMEImage(img["data"], _subtype=subtype)
+        part.add_header("Content-ID", f'<{img["cid"]}>')
+        part.add_header("Content-Disposition", "inline", filename=img.get("filename", "image.png"))
+        msg.attach(part)
     return msg
 
 
-def send_email(subject, body, cfg, success_msg="✅ 邮件发送成功"):
+def send_email(subject, body, cfg, success_msg="✅ 邮件发送成功", inline_images=None):
     """发送或打印邮件。dry_run 时仅打印不发送。"""
     if cfg["dry_run"]:
         print("=" * 60)
@@ -64,7 +71,7 @@ def send_email(subject, body, cfg, success_msg="✅ 邮件发送成功"):
         print("ℹ️  Dry-run 模式，邮件未实际发送")
         return
 
-    msg = build_message(subject, body, cfg)
+    msg = build_message(subject, body, cfg, inline_images=inline_images)
     try:
         with smtplib.SMTP_SSL(cfg["server"], cfg["port"], timeout=15) as server:
             server.login(cfg["user"], cfg["password"])

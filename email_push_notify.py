@@ -28,7 +28,7 @@ def get_git_info():
 
 # ==================== HTML 构建 ====================
 
-def build_html():
+def build_html(inline_images=None):
     author, commit_msg, files, stat = get_git_info()
     BJ_TIME = datetime.now(timezone(timedelta(hours=8)))
     now = BJ_TIME.strftime("%Y-%m-%d %H:%M")
@@ -50,7 +50,8 @@ def build_html():
         "files": [f for f in files if f],
     }
 
-    return build_html_digest(data, warnings, generated_at=now, commit_info=commit_info)
+    return build_html_digest(data, warnings, generated_at=now,
+                             commit_info=commit_info, inline_images=inline_images)
 
 
 # ==================== 发送 ====================
@@ -62,12 +63,14 @@ def send():
     if cfg["dry_run"]:
         print("ℹ️  Dry-run 模式：邮件将打印到控制台，不会实际发送\n")
 
-    html = build_html()
+    inline_images = []
+    html = build_html(inline_images)
     BJ_TIME = datetime.now(timezone(timedelta(hours=8)))
     subject = f"[大乐透] 项目更新 · {BJ_TIME.strftime('%m-%d %H:%M')}"
 
     try:
-        send_email(subject, html, cfg, success_msg="✅ 推送通知邮件发送成功")
+        send_email(subject, html, cfg, success_msg="✅ 推送通知邮件发送成功",
+                   inline_images=inline_images)
     except Exception as e:
         print(f"❌ 邮件发送失败: {e}")
         sys.exit(1)
