@@ -485,6 +485,7 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
     group_map = _build_group_map(pred)
 
     stats = {}
+    group_stats = {}  # (model_id, strategy) -> 该组自身历史蓝球命中 / 期数
     for rec in records:
         actual = rec.get("actual_result") or {}
         actual_back = set(actual.get("back_balls", []))
@@ -500,6 +501,9 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
                 gid = group_map.get(model_id, {}).get(strategy)
                 short = _short_model_name(model_id, model_name)
                 label = f"{short}·{gid}" if gid else f"{short}·{strategy}"
+                gs = group_stats.setdefault((model_id, strategy), {"total": 0, "games": 0})
+                gs["total"] += group["hit_result"].get("back_hit_count", 0)
+                gs["games"] += 1
                 entries.append((
                     model_id, strategy, label,
                     set(group.get("front_balls", [])),
@@ -542,11 +546,13 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
         return (f'<p style="color:#94a3b8;font-size:11px;padding:10px">'
                 f'(暂无组合单期覆盖 {threshold} 个蓝球)</p>')
 
-    def _mini(group):
+    def _mini(group, key):
         if not group:
             return '<span style="color:#94a3b8">暂无最新预测</span>'
         backs = " ".join(group.get("back_balls", []))
-        return f'<span style="color:#3b82f6">后 {backs}</span>'
+        gs = group_stats.get(key)
+        stat = f'<span style="color:#94a3b8">（{gs["total"]}球/{gs["games"]}期）</span>' if gs else ""
+        return f'<span style="color:#3b82f6">后 {backs}</span>{stat}'
 
     target_period = (pred or {}).get("target_period", "")
     target_text = f"第 {target_period} 期" if target_period else "最新一期"
@@ -559,7 +565,7 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
         blocks = ""
         for idx, key in enumerate(r["keys"]):
             label = r["labels"].get(key, "—")
-            mini = _mini(current.get(key))
+            mini = _mini(current.get(key), key)
             prefix = "+ " if idx else ""
             margin = "margin-top:2px;" if idx else ""
             blocks += f'''
@@ -574,7 +580,7 @@ def _build_best_blue_combo_html(hist, pred=None, limit=10, threshold=2):
 
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">
-      两组不同模型+策略后区蓝球合并去重，单期覆盖 {threshold} 个蓝球计 1 次 · 按次数取 Top {limit} · 每行一组，号码仅显示{target_text}后区未开奖预测
+      两组不同模型+策略后区蓝球合并去重，单期覆盖 {threshold} 个蓝球计 1 次 · 按次数取 Top {limit} · 每行一组，号码仅显示{target_text}后区未开奖预测，括号内为该组自身历史蓝球命中/期数
     </div>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
       <thead><tr style="background:#f8fafc">
