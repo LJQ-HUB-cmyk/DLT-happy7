@@ -357,10 +357,10 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
     group_map = _build_group_map(pred)
 
     stats = {}
+    group_stats = {}  # (model_id, strategy) -> 该组自身历史前区命中 / 期数
     for rec in records:
         actual = rec.get("actual_result") or {}
         actual_front = set(actual.get("front_balls", []))
-        actual_back = set(actual.get("back_balls", []))
 
         entries = []
         for model in rec.get("models", []):
@@ -373,42 +373,42 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
                 gid = group_map.get(model_id, {}).get(strategy)
                 short = _short_model_name(model_id, model_name)
                 label = f"{short}·{gid}" if gid else f"{short}·{strategy}"
+                gs = group_stats.setdefault((model_id, strategy), {"total": 0, "games": 0})
+                gs["total"] += group["hit_result"].get("front_hit_count", 0)
+                gs["games"] += 1
                 entries.append((
                     model_id, strategy, label,
                     set(group.get("front_balls", [])),
-                    set(group.get("back_balls", [])),
                 ))
 
         for i in range(len(entries)):
-            mid_a, strat_a, label_a, front_a, back_a = entries[i]
+            mid_a, strat_a, label_a, front_a = entries[i]
             for j in range(i + 1, len(entries)):
-                mid_b, strat_b, label_b, front_b, back_b = entries[j]
+                mid_b, strat_b, label_b, front_b = entries[j]
                 if mid_a == mid_b and strat_a == strat_b:
                     continue
                 key_a = (mid_a, strat_a)
                 key_b = (mid_b, strat_b)
                 key = tuple(sorted([key_a, key_b]))
                 front_hits = len((front_a | front_b) & actual_front)
-                hits = front_hits + len((back_a | back_b) & actual_back)
                 s = stats.get(key)
                 if s is None:
                     s = stats[key] = {
                         "keys": key,
                         "labels": {key_a: label_a, key_b: label_b},
-                        "front_count": 0,
-                        "best": 0, "total": 0, "games": 0,
+                        "front_count": 0, "max_front": 0, "front_total": 0, "games": 0,
                     }
                 s["games"] += 1
-                s["total"] += hits
-                s["best"] = max(s["best"], hits)
+                s["front_total"] += front_hits
+                s["max_front"] = max(s["max_front"], front_hits)
                 if front_hits >= front_threshold:
                     s["front_count"] += 1
 
     rows = sorted(
         stats.values(),
         key=lambda s: (
-            -s["front_count"], -s["best"],
-            -(s["total"] / max(s["games"], 1)),
+            -s["front_count"], -s["max_front"],
+            -(s["front_total"] / max(s["games"], 1)),
             s["labels"].get(s["keys"][0], ""),
             s["labels"].get(s["keys"][1], ""),
         ),
@@ -418,14 +418,13 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
         return (f'<p style="color:#94a3b8;font-size:11px;padding:10px">'
                 f'(暂无组合单期前区命中达到 {front_threshold} 球)</p>')
 
-    def _mini(group):
+    def _mini(group, key):
         if not group:
             return '<span style="color:#94a3b8">暂无最新预测</span>'
         fronts = " ".join(group.get("front_balls", []))
-        backs = " ".join(group.get("back_balls", []))
-        return (f'<span style="color:#ef4444">前 {fronts}</span>'
-                f'<span style="color:#cbd5e1"> | </span>'
-                f'<span style="color:#3b82f6">后 {backs}</span>')
+        gs = group_stats.get(key)
+        stat = f'<span style="color:#94a3b8">（{gs["total"]}球/{gs["games"]}期）</span>' if gs else ""
+        return f'<span style="color:#ef4444">前 {fronts}</span>{stat}'
 
     target_period = (pred or {}).get("target_period", "")
     target_text = f"第 {target_period} 期" if target_period else "最新一期"
@@ -435,12 +434,11 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
     body = ""
     for i, r in enumerate(top):
         bg = _row_bg(i)
-        avg = r["total"] / r["games"] if r["games"] else 0
         key_a, key_b = r["keys"]
         label_a = r["labels"].get(key_a, "—")
         label_b = r["labels"].get(key_b, "—")
-        mini_a = _mini(current.get(key_a))
-        mini_b = _mini(current.get(key_b))
+        mini_a = _mini(current.get(key_a), key_a)
+        mini_b = _mini(current.get(key_b), key_b)
         body += f'''
         <tr style="background:{bg}">
           <td style="{cell}text-align:center;font-weight:700">{_medal(i)}</td>
@@ -449,21 +447,19 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
             <div style="font-weight:600;color:#0f172a;white-space:nowrap;margin-top:2px">+ {label_b}<span style="margin-left:5px;font-weight:400">{mini_b}</span></div>
           </td>
           <td style="{cell}text-align:center;color:#475569">{r["front_count"]}次</td>
-          <td style="{cell}text-align:center;color:#475569">{r["best"]}球</td>
-          <td style="{cell}text-align:center;color:#475569">{avg:.2f}球</td>
+          <td style="{cell}text-align:center;color:#475569">{r["max_front"]}球</td>
         </tr>'''
 
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">
-      两两合并号码并去重，单期前区总球数 ≥{front_threshold} 计 1 次 · 按次数取 Top {limit} · 每行一组，号码为{target_text}未开奖预测
+      两两合并号码并去重，单期前区总球数 ≥{front_threshold} 计 1 次 · 按次数取 Top {limit} · 每行一组，号码仅显示{target_text}前区未开奖预测，括号内为该组自身历史前区命中/期数
     </div>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
       <thead><tr style="background:#f8fafc">
         <th style="{head}text-align:center">#</th>
-        <th style="{head}text-align:left">组合与最新预测</th>
+        <th style="{head}text-align:left">组合与前区预测</th>
         <th style="{head}text-align:center">前区总球数≥{front_threshold}</th>
-        <th style="{head}text-align:center">单期最高</th>
-        <th style="{head}text-align:center">平均命中</th>
+        <th style="{head}text-align:center">前区去重最高</th>
       </tr></thead>
       <tbody>{body}</tbody>
     </table>'''
