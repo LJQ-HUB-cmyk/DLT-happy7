@@ -415,30 +415,45 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
                 key_a = (mid_a, strat_a)
                 key_b = (mid_b, strat_b)
                 key = tuple(sorted([key_a, key_b]))
+                side_a_hits = len(front_a & actual_front)
+                side_b_hits = len(front_b & actual_front)
                 front_hits = len((front_a | front_b) & actual_front)
                 s = stats.get(key)
                 if s is None:
                     s = stats[key] = {
                         "keys": key,
                         "labels": {key_a: label_a, key_b: label_b},
-                        "front_count": 0, "max_front": 0, "front_total": 0, "games": 0,
+                        "front_count": 0, "max_front": 0, "max_single": 0,
+                        "front_total": 0, "games": 0,
                     }
                 s["games"] += 1
                 s["front_total"] += front_hits
                 s["max_front"] = max(s["max_front"], front_hits)
+                s["max_single"] = max(s["max_single"], side_a_hits, side_b_hits)
                 if front_hits >= front_threshold:
                     s["front_count"] += 1
 
     rows = sorted(
         stats.values(),
         key=lambda s: (
-            -s["front_count"], -s["max_front"],
+            -s["front_count"], -s["max_front"], -s["max_single"],
             -(s["front_total"] / max(s["games"], 1)),
             s["labels"].get(s["keys"][0], ""),
             s["labels"].get(s["keys"][1], ""),
         ),
     )
-    top = [r for r in rows if r["front_count"] > 0][:limit]
+    # 每个「模型+策略」在 Top 列表中最多出现 2 次，避免同一强组霸榜
+    top, appearances = [], {}
+    for r in rows:
+        if len(top) >= limit:
+            break
+        if r["front_count"] <= 0:
+            break
+        if any(appearances.get(k, 0) >= 2 for k in r["keys"]):
+            continue
+        for k in r["keys"]:
+            appearances[k] = appearances.get(k, 0) + 1
+        top.append(r)
     if not top:
         return (f'<p style="color:#94a3b8;font-size:11px;padding:10px">'
                 f'(暂无组合单期前区命中达到 {front_threshold} 球)</p>')
@@ -478,11 +493,12 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
           <td style="{cell}">{blocks}</td>
           <td style="{cell}text-align:center;color:#475569">{r["front_count"]}次</td>
           <td style="{cell}text-align:center;color:#475569">{r["max_front"]}球</td>
+          <td style="{cell}text-align:center;color:#475569">{r["max_single"]}球</td>
         </tr>'''
 
     return f'''
     <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">
-      两两合并号码并去重，单期前区总球数 ≥{front_threshold} 计 1 次 · 按次数取 Top {limit} · 每行一组，号码仅显示{target_text}前区未开奖预测，括号内为该组自身历史前区命中/期数
+      两两合并号码并去重，单期前区总球数 ≥{front_threshold} 计 1 次 · 按次数/去重最高/单个模型最高排序取 Top {limit} · 每个模型+策略最多出现 2 次 · 每行一组，号码仅显示{target_text}前区未开奖预测，括号内为该组自身历史前区命中/期数
     </div>
     <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden">
       <thead><tr style="background:#f8fafc">
@@ -490,6 +506,7 @@ def _build_best_combo_html(hist, pred=None, limit=10, front_threshold=4):
         <th style="{head}text-align:left">组合与前区预测</th>
         <th style="{head}text-align:center">前区总球数≥{front_threshold}</th>
         <th style="{head}text-align:center">前区去重最高</th>
+        <th style="{head}text-align:center">单个模型最高</th>
       </tr></thead>
       <tbody>{body}</tbody>
     </table>'''
