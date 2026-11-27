@@ -1,6 +1,6 @@
 name: Email Daily Digest
 
-on:
+#####on: 取消邮件推送
   schedule:
     # 每天 UTC 04:30 = 北京时间 12:30
     # 此时前一晚生成的 AI 预测已提交入库，邮件包含最新预测
